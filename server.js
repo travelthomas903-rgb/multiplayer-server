@@ -54,14 +54,17 @@ io.on('connection', (socket) => {
         socket.emit('roomCreated', roomCode);
     });
 
-    // --- 2. RAUM BEITRETEN (mit Username und Code) ---
-    // data: { code: "...", username: "..." }
-    socket.on('joinRoom', (data) => {
-        // --- KORREKTUR für den TypeError ---
-        // Wir gehen davon aus, dass data.code der String ist.
+   socket.on('joinRoom', (data) => { 
+        
+        // **DIES IST DIE KRITISCHE STELLE, die auf der 56 abstürzt**
+        // Die Variable, die den Code enthält, ist 'data.code'
         if (!data || !data.code) { 
              socket.emit('error', 'Fehlender Raum-Code.');
              return;
+        }
+        
+        const code = data.code.toUpperCase(); // <-- Muss 'data.code' sein!
+        const room = activeRooms[code];
         }
         
         const code = data.code.toUpperCase();
@@ -145,3 +148,4 @@ io.on('connection', (socket) => {
 server.listen(PORT, () => {
     console.log(`Server läuft auf Port ${PORT}`);
 });
+
