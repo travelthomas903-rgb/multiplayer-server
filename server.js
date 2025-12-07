@@ -5,8 +5,7 @@ const { Server } = require("socket.io");
 const app = express();
 const server = http.createServer(app);
 
-// WICHTIG: Erlaubt dem Frontend (deiner Netlify-Seite), sich zu verbinden
-// '*' erlaubt jede Origin-URL (am einfachsten für den Anfang)
+// Wichtig: Erlaubt dem Frontend (Netlify) die Verbindung
 const io = new Server(server, {
     cors: {
         origin: "*", 
@@ -14,101 +13,91 @@ const io = new Server(server, {
     }
 });
 
-// Render setzt die Umgebungsvariable 'PORT' automatisch.
 const PORT = process.env.PORT || 3000; 
 
-// Einfacher In-Memory Speicher für aktive Räume
-// Struktur: { "ABCD": { players: 1, sockets: [socketId], code: "ABCD" } }
-const activeRooms = {};
+// Struktur: { "ABCD": { creatorId: socket.id, players: [{id, username}], code: "ABCD" } }
+const activeRooms = {}; 
 
-// Funktion zum Generieren eines zufälligen, einzigartigen 4-stelligen Codes
 function generateUniqueCode() {
     let code;
     do {
-        // Generiert einen 4-stelligen Großbuchstaben-Code
         code = Math.random().toString(36).substring(2, 6).toUpperCase();
     } while (activeRooms[code]);
     return code;
 }
 
-// Wenn sich ein neuer Client (Spieler) verbindet
 io.on('connection', (socket) => {
-    console.log(`Neuer Client verbunden: ${socket.id}`);
 
     // --- 1. RAUM ERSTELLEN ---
-    socket.on('createRoom', () => {
+    socket.on('createRoom', (data) => {
         const roomCode = generateUniqueCode();
-        socket.join(roomCode); // Client tritt dem Socket.IO-Raum bei
+        socket.join(roomCode);
         
         activeRooms[roomCode] = {
-            players: 1,
-            sockets: [socket.id],
+            creatorId: socket.id,
+            players: [{ id: socket.id, username: data.username }],
             code: roomCode
         };
 
-        // Informiert den Client (Ersteller), dass der Raum bereit ist
         socket.emit('roomCreated', roomCode);
-        console.log(`Raum ${roomCode} erstellt von ${socket.id}`);
     });
 
     // --- 2. RAUM BEITRETEN ---
-    socket.on('joinRoom', (roomCode) => {
-        const code = roomCode.toUpperCase();
+    socket.on('joinRoom', (data) => {
+        const code = data.code.toUpperCase();
         const room = activeRooms[code];
         
-        if (!room) {
-            // Raum existiert nicht
-            socket.emit('error', 'Raum existiert nicht.');
-            return;
-        }
+        if (!room) { socket.emit('error', 'Raum existiert nicht.'); return; }
+        if (room.players.length >= 2) { socket.emit('error', 'Raum ist bereits voll.'); return; }
 
-        if (room.players >= 2) {
-            // Raum ist voll
-            socket.emit('error', 'Raum ist bereits voll.');
-            return;
-        }
-
-        // Spieler tritt dem Raum bei
         socket.join(code);
-        room.players++;
-        room.sockets.push(socket.id);
+        room.players.push({ id: socket.id, username: data.username });
         
-        // Informiert den Client (Beitreter), dass er beigetreten ist
+        // Informiert den Beitreter
         socket.emit('roomJoined', code);
-        console.log(`Spieler ${socket.id} ist Raum ${code} beigetreten.`);
         
-        // Informiert BEIDE Spieler, dass das Spiel starten kann
-        io.to(code).emit('startGame');
+        // Informiert BEIDE Spieler, dass das Spiel beginnt
+        // Finde den Creator Socket und sende 'startGame' mit isCreator=true
+        io.to(room.creatorId).emit('startGame', true);
+        
+        // Sende an den beigetretenen Spieler 'startGame' mit isCreator=false
+        socket.emit('startGame', false);
     });
 
-    // --- 3. DATENAUSTAUSCH (SPIEL-LOGIK) ---
-    // Beispiel: Spieler schickt einen Begriff/Zug an den Gegner
-    socket.on('gameAction', (data) => {
+    // --- 3. SPIELZUG SENDEN ---
+    socket.on('gameAction', (term) => {
         const roomCode = Array.from(socket.rooms).find(room => room !== socket.id);
-        if (roomCode) {
-            // Sendet die Aktion an ALLE anderen Sockets im Raum (außer dem Sender selbst)
-            socket.to(roomCode).emit('opponentAction', data);
+        
+        if (roomCode && activeRooms[roomCode]) {
+            const room = activeRooms[roomCode];
+            
+            const sender = room.players.find(p => p.id === socket.id);
+            const opponent = room.players.find(p => p.id !== socket.id);
+
+            if (opponent && sender) {
+                // Sende die Aktion nur an den Gegner
+                io.to(opponent.id).emit('opponentAction', { 
+                    username: sender.username, 
+                    term: term 
+                });
+            }
         }
     });
 
     // --- 4. TRENNUNG/DISCONNECT ---
     socket.on('disconnect', () => {
-        console.log(`Client getrennt: ${socket.id}`);
-        // Finde den Raum, den der getrennte Spieler verlassen hat
         for (const code in activeRooms) {
             const room = activeRooms[code];
-            if (room.sockets.includes(socket.id)) {
-                // Spieler aus der Liste entfernen
-                room.sockets = room.sockets.filter(id => id !== socket.id);
-                room.players--;
+            const disconnectedPlayer = room.players.find(p => p.id === socket.id);
 
-                if (room.players === 0) {
-                    // Wenn der letzte Spieler geht, lösche den Raum
+            if (disconnectedPlayer) {
+                room.players = room.players.filter(p => p.id !== socket.id);
+                
+                if (room.players.length === 0) {
                     delete activeRooms[code];
-                    console.log(`Raum ${code} gelöscht.`);
                 } else {
-                    // Informiere den verbleibenden Spieler
-                    socket.to(code).emit('playerDisconnected', 'Dein Gegner hat das Spiel verlassen.');
+                    const remainingPlayerId = room.players[0].id;
+                    io.to(remainingPlayerId).emit('playerDisconnected', disconnectedPlayer.username);
                 }
                 break;
             }
@@ -116,7 +105,6 @@ io.on('connection', (socket) => {
     });
 });
 
-// Server starten
 server.listen(PORT, () => {
     console.log(`Server läuft auf Port ${PORT}`);
 });
