@@ -44,14 +44,15 @@ io.on('connection', (socket) => {
 
     // --- 2. RAUM BEITRETEN ---
     socket.on('joinRoom', (data) => {
-        const code = data.code.toUpperCase();
-        const room = activeRooms[code];
-        
-        if (!room) { socket.emit('error', 'Raum existiert nicht.'); return; }
-        if (room.players.length >= 2) { socket.emit('error', 'Raum ist bereits voll.'); return; }
+    // 1. Hole den Code aus dem gesendeten Datenobjekt
+    const code = data.code.toUpperCase();
+    const room = activeRooms[code];
+    
+    if (!room) { socket.emit('error', 'Raum existiert nicht.'); return; }
+    if (room.players.length >= 2) { socket.emit('error', 'Raum ist bereits voll.'); return; }
 
-        socket.join(code);
-        room.players.push({ id: socket.id, username: data.username });
+    socket.join(code);
+    room.players.push({ id: socket.id, username: data.username });
         
         // Informiert den Beitreter
         socket.emit('roomJoined', code);
